@@ -1,0 +1,70 @@
+stages:
+  
+#   - Veracode_static_analysis
+    - Veracode_Import
+
+#veracode_sca:
+#    image: python:3.7.9
+#    stage: security
+#    script: 
+#        - curl -sSL https://download.sourceclear.com/ci.sh | sh -s scan
+#    allow_failure: true
+
+#Veracode_static_analysis:
+#    image: openjdk:8
+#    stage: Veracode_static_analysis
+#    before_script:
+#        - wget -q -O veracode-wrapper.jar https://repo1.maven.org/maven2/com/veracode/vosp/api/wrappers/vosp-api-wrappers-java/20.8.7.1/vosp-api-wrappers-java-20.8.7.1.jar
+#    script:
+#        - tar -cvzf veracode.tar.gz --exclude=./veracode.tar.gz --exclude=./veracode-wrapper.jar ./*
+#        - java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY}
+#          -action UploadAndScan -createprofile true -appname "${CI_PROJECT_NAME}" -autoscan true -filepath veracode.tar.gz 
+#          -version "${CI_PROJECT_NAME} job ${CI_JOB_ID} in pipeline ${CI_PIPELINE_ID}" -scantimeout 360
+#    allow_failure: true
+
+
+Veracode_Import:
+    image: openjdk:8
+    stage: Veracode_Import
+    before_script:
+        - wget -q -O veracode-wrapper.jar https://repo1.maven.org/maven2/com/veracode/vosp/api/wrappers/vosp-api-wrappers-java/20.8.7.1/vosp-api-wrappers-java-20.8.7.1.jar
+    script:
+        - |
+            apt-get update && apt-get install -qy xmlstarlet libxml2-utils
+            app_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getapplist | grep -w "VeraImport" | sed -n 's/.* app_id=\"\([0-9]*\)\" .*/\1/p')
+            echo $app_ID
+            build_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getbuildinfo -appid $app_ID | sed '2 s/xmlns=".*"//g' | xmllint --xpath "string(/buildinfo/build/@build_id)" -) 
+            java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action detailedreport -buildid $build_ID -outputfilepath results.xml
+            xmlResults=$(cat results.xml | sed '2 s/xmlns=".*"//g')
+            flawCount=$(echo ${xmlResults} | xmllint --xpath "count(/detailedreport/severity/category/cwe/staticflaws/flaw)" -)
+            declare -A sevDesc
+            sevDesc[0]="Info"
+            sevDesc[1]="VeryLow"
+            sevDesc[2]="Low"
+            sevDesc[3]="Medium"
+            sevDesc[4]="High"
+            sevDesc[5]="VeryHigh"
+            for ((i=1; i<=flawCount; i++)); do
+            flaw=$(echo ${xmlResults} | xmllint --xpath '(/detailedreport/severity/category/cwe/staticflaws/flaw)['"$i"']' -)
+                issueid=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@issueid)' -)
+                severity=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@severity)' -)
+                module=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@module)' -)
+                categoryname=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@categoryname)' -)
+                description=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@description)' -)
+                sourcefilepath=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@sourcefilepath)' -)
+                sourcefile=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@sourcefile)' -)
+                line=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@line)' -)
+                remediation_status=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@remediation_status)' -)
+                affects_policy_compliance=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@affects_policy_compliance)' -)
+                pcirelated=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@pcirelated)' -)               
+            if [[ $remediation_status != "Fixed" ]]; then
+                issueDescription=$(echo -e "\`\`\`\n- Veracode ID = $issueid\n- Severity = ${sevDesc[$severity]}\n- module = $module\n- File = $sourcefile ($sourcefilepath)\n- Line = $line\n- Affects policy compliance = $affects_policy_compliance\n- PCI related = $pcirelated\n\`\`\`\n**Description:**\n\n$description")
+                curl -G --request POST --header "PRIVATE-TOKEN:${PRIVATETOKEN}" --data-urlencode "title=$categoryname" --data-urlencode "description=$issueDescription" --data-urlencode "labels=Severity-${sevDesc[$severity]}" "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/issues";
+            fi;
+            done
+        
+
+
+
+
+

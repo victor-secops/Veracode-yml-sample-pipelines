@@ -1,0 +1,125 @@
+
+def appname = "PIVAA - jenkins - pipeline"
+pipeline {
+    agent any
+
+    stages {
+        
+        stage('Git') {
+            steps {
+                //echo "git"
+                git 'http://localhost:3000/administrator/PIVAA'
+            }
+        }
+        stage('Build') {
+            steps {
+                
+                //echo "build"
+                sh 'gradle build'
+              
+            }
+        }
+        stage('Upload SAST') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'SRCCLR_API_TOKEN_USER_PASS', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+                    veracode applicationName: "${appname}",
+                    createSandbox: true,
+                    criticality: 'VeryHigh',
+                    scanName: '$buildnumber',
+                    uploadIncludesPattern: '**/app-debug.apk',
+                    vid: USER,
+                    vkey: PASS
+                    //sh "rm '/var/lib/jenkins/workspace/PIVAA Pipeline/app/build/outputs/apk/debug/output.json'"
+                    //sh "java -jar /var/lib/jenkins/custom-tools/VeracodeJavaAPI.jar -action uploadandscan -vid $USER -vkey $PASS -appname 'PIVAA - jenkins - pipeline' -createprofile true -criticality VeryHigh -createsandbox true -version ${BUILD_NUMBER} -filepath '/var/lib/jenkins/workspace/PIVAA Pipeline/app/build/outputs/apk/debug/'"
+                    sh "pwd"
+                echo "sast"
+                    
+                }
+                
+            }
+            
+        }
+
+        stage('SCA'){
+            steps{
+                withCredentials([string(credentialsId: 'SRCCLR_API_TOKEN', variable: 'SRCCLR_API_TOKEN')]) {
+                    catchError(buildResult: 'SUCCESS', message: 'DETECTADO COMPONENTE VULNERAVEL') {
+                        sh "srcclr scan . --allow-dirty" 
+                        echo "passou"
+                    }
+                }
+            }
+        }
+        stage('Unit Test'){
+            steps{
+                echo "unit test"
+                sh "sleep \$(( (RANDOM % 5) 30))"           
+            
+        }
+    }
+        stage('Resultados SAST'){
+            steps{
+                withCredentials([usernamePassword(credentialsId: 'SRCCLR_API_TOKEN_USER_PASS', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+                    
+                    
+                    sh(script: '''#!/bin/bash
+                    appname="PIVAA - jenkins - pipeline"
+                    PRESCAN_SLEEP_TIME=30
+                    SCAN_SLEEP_TIME=30
+                    applist=$(java -jar /var/lib/jenkins/custom-tools/VeracodeJavaAPI.jar -vid $USER -vkey $PASS -action getapplist)
+                    appid=$(echo "$applist" | sed '2 s/xmlns=".*"//g' | xmllint --xpath "string(/applist/app[@app_name='$appname']/@app_id)" -)
+                    scanstatus=$(java -jar /var/lib/jenkins/custom-tools/VeracodeJavaAPI.jar -vid $USER -vkey $PASS -action getbuildinfo -appid "$appid")
+                    while true;
+                    do
+                        scanstatus=$(java -jar /var/lib/jenkins/custom-tools/VeracodeJavaAPI.jar -vid $USER -vkey $PASS -action getbuildinfo -appid "$appid")
+                        scan_status=$(echo "$scanstatus" | sed '2 s/xmlns=".*"//g' | xmllint --xpath "string(/buildinfo/build/analysis_unit/@status)" -)
+                        if [[ $scan_status = *"Scan In Process"* ]];
+                        then
+                            echo ""
+                            echo '[INFO] scan in process ...'
+                            echo '[INFO] wait 2 more minutes ...'
+                            sleep $SCAN_SLEEP_TIME
+                        elif [[ $scan_status = *"Submitted to Engine"* ]];
+                        then
+                            echo ""
+                            echo '[INFO] Application submitted to scan engine'
+                            echo '[INFO] Scan will start momentarily'
+                            echo '[INFO] wait 1 more mintue'
+                            sleep $PRESCAN_SLEEP_TIME
+                        elif [[ $scan_status = *"Pre-Scan Submitted"* ]];
+                        then
+                           echo ""
+                           echo '[INFO] pre-scan still running ...'
+                           echo '[INFO] wait 1 more minute ...'
+                           sleep $PRESCAN_SLEEP_TIME
+                        elif [[ $scan_status = *"Pre-Scan Success"* ]];
+                        then
+                            log=$(java -jar /var/lib/jenkins/custom-tools/VeracodeJavaAPI.jar -vid $USER -vkey $PASS -action GetPreScanResults -appid "$appid")
+                            echo ""
+                            echo '[ ERROR ] Something went wrong with the prescan!'
+                            echo "$log"
+                            exit 1 && break
+                            echo "entrou no que cria o log"
+                        else
+                        
+                        if [ "$scan_status" = "Results Ready" ];
+                        
+                        
+                        then
+                            echo ""
+                            echo '[INFO] scan has finished'
+                            
+                            echo "entrou aqui results ready"
+                            break;
+                        fi
+                    fi
+                done
+                    ''')
+                    
+                }
+            }
+                       
+        }
+
+    }
+}

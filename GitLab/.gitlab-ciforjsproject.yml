@@ -1,0 +1,71 @@
+image: openjdk:8
+#
+stages:
+  - Build
+  - Archive
+  - Veracode_Software_Composition_analysis
+  - Veracode_static_analysis
+  - Veracode_PipelineScan
+  - deploy
+
+build-image:
+  stage: Build
+  script:
+      - ls
+    
+package-zip:
+    stage: Archive
+    script:
+        - git archive -o VeracodePackage.zip HEAD     
+    artifacts:
+        paths:
+            - VeracodePackage.zip
+
+Veracode_software_composition_analysis:
+    stage: Veracode_Software_Composition_analysis
+    script:
+        - curl -sSL https://download.sourceclear.com/ci.sh | bash -s scan . --update-advisor
+    allow_failure: false
+
+
+
+Veracode_static_analysis:
+    stage: Veracode_static_analysis
+    before_script:
+        - wget -q -O veracode-wrapper.jar https://repo1.maven.org/maven2/com/veracode/vosp/api/wrappers/vosp-api-wrappers-java/20.8.7.1/vosp-api-wrappers-java-20.8.7.1.jar
+    script:
+        - java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY}
+          -action UploadAndScan -appname "NodeGoat - Gitlab" -createprofile false -autoscan true -filepath VeracodePackage.zip -version "job ${CI_JOB_ID} in pipeline ${CI_PIPELINE_ID}"
+
+Veracode_PipelineScan:
+    stage: Veracode_PipelineScan
+    artifacts:
+        name: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_NAME}_${CI_COMMIT_SHA}_pipeline-results
+        paths:
+            - results.json
+        expire_in: 1 week
+    when: always
+    script:
+        - curl -O https://downloads.veracode.com/securityscan/pipeline-scan-LATEST.zip
+        - unzip pipeline-scan-LATEST.zip pipeline-scan.jar
+        - java -jar pipeline-scan.jar
+            --veracode_api_id "${TEAM_ANALYSISCENTER_ID}"
+            --veracode_api_key "${TEAM_ANALYSISCENTER_KEY}"
+            --file "VeracodePackage.zip"
+            --project_name "${CI_PROJECT_PATH}"
+            --project_url "${CI_REPOSITORY_URL}"
+            --project_ref "${CI_COMMIT_REF_NAME}"
+            --gitlab_api_token "${PRIVATE_TOKEN}"            
+            --timeout 180
+            --project_name "${CI_PROJECT_PATH}"
+            --project_url "${CI_REPOSITORY_URL}"
+            --project_ref "${CI_COMMIT_REF_NAME}"
+            --issue_details true
+            --gl_issue_generation true
+    allow_failure: true
+
+
+deploy:
+  stage: deploy
+  script:
+    - echo deploy!
