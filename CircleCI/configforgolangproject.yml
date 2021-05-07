@@ -1,0 +1,119 @@
+#Steps:
+# Veracode Software Composition Analysis
+# Veracode Static Analysis Asynchronous Upload and Scan
+# Veracode Static Analysis PipelineScan
+# Import flaws to Azure Boards
+version: 2.1
+jobs:
+  Veracode_sca_image_scanning:
+    docker:
+      - image: cimg/openjdk:8.0.282-node
+    #working_directory: ~/repo/vulnerability-goapp
+    steps:
+      # get the files from the previous job
+      - attach_workspace:
+          at: ./
+      - setup_remote_docker:
+          version: 19.03.13
+      # download and run Veracode SCA
+      - run:
+          name: "Veracode Software Composition Analysis image scanning"
+          command: |
+            curl -sSL https://download.sourceclear.com/ci.sh | bash -s scan --image circleci/golang:1.15.8 || true
+  build:
+    docker:
+      - image: circleci/golang:1.15.8
+    working_directory: ~/repo/Vulnerability-goapp
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            pwd
+            ls -lha
+            go get all
+            go mod download
+            go mod vendor
+            cd ..
+            zip -r upload.zip Vulnerability-goapp -x *runenv/*
+            ls -lha
+            pwd
+      - persist_to_workspace:
+          root: ~/repo/
+          paths:
+            - upload.zip
+            - Vulnerability-goapp
+      
+
+  Veracode_sca:
+    docker:
+      - image: circleci/golang:1.15.8
+    working_directory: ~/repo
+    steps:
+      # get the files from the previous job
+      - attach_workspace:
+          at: ./
+      # download and run Veracode SCA
+      - run:
+          name: "Veracode Software Composition Analysis"
+          command: |
+            pwd
+            ls -lha
+            cd Vulnerability-goapp
+            export SRCCLR_SCM_TOKEN=$github_api
+            export SRCCLR_SCM_TYPE=GITHUB
+            #export DEBUG=1
+            git config --global user.email "$emailgit"
+            git config --global user.name "$nomegit"            
+            git remote set-url origin https://github.com/VictorM3/Vulnerability-goapp.git
+            git checkout -f master
+            export EXTRA_ARGS='--update-advisor --pull-request'
+            curl -sSL https://download.sourceclear.com/ci.sh | bash -s – scan $EXTRA_ARGS   
+  veracode_sast:
+    docker:
+      - image: cimg/openjdk:8.0.282-node
+    working_directory: ~/repo
+    steps:
+      # get the files from the previous job
+      - attach_workspace:
+          at: ./   
+      # grab the Veracode agent
+      - run: 
+          name: "Package for upload to Veracode"
+          #command: zip -r upload.zip nodegoat
+          command: |
+            pwd
+            ls -lha
+      - run:
+          name: "Get the Veracode agent"
+          command: |
+            wget -q -O veracode-wrapper.jar https://repo1.maven.org/maven2/com/veracode/vosp/api/wrappers/vosp-api-wrappers-java/21.2.7.4/vosp-api-wrappers-java-21.2.7.4.jar
+      - run:
+          name: "Upload to Veracode"
+          command: java -jar veracode-wrapper.jar 
+              -vid $TEAM_ANALYSISCENTER_ID
+              -vkey $TEAM_ANALYSISCENTER_KEY
+              -action uploadandscan 
+              -appname "goapp_CircleCi"
+              -createprofile true 
+              -version CircleCI-$CIRCLE_BUILD_NUM 
+              -filepath upload.zip
+              -scantimeout 60
+              -selectedpreviously true
+workflows:
+  version: 2.1
+  build_and_scan:
+    jobs:
+      #- Veracode_sca_image_scanning
+      - build
+      #- build:
+      #    requires:
+      #      - Veracode_sca_image_scanning
+      - Veracode_sca:
+          requires:
+            - build
+      - veracode_sast:
+          requires:
+            - build
+      
+      
