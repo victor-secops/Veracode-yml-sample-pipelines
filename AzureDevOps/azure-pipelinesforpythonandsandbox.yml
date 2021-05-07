@@ -1,0 +1,69 @@
+#Steps:
+# Veracode Software Composition Analysis
+# Veracode Static Analysis Asynchronous Upload and Scan Sandbox
+# Veracode Static Analysis PipelineScan
+
+trigger:
+- $(Build.SourceBranchName)
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- script: |
+      tar -hcvzf $(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz --exclude=/.git $(Build.Repository.LocalPath)/*
+  displayName: 'Zip project'
+- script: |
+      export SRCCLR_SCM_URI=$(Build.Repository.Uri)
+      export SRCCLR_SCM_REF=$(Build.SourceBranchName)
+      export SRCCLR_SCM_REF_TYPE="branch"
+      export SRCCLR_SCM_REV=$(Build.SourceVersion)
+      export SRCCLR_API_TOKEN=$(SRCCLR_API_TOKEN)
+      curl -sSL https://download.sourceclear.com/ci.sh | bash -s test --pip
+      curl -sSL https://download.sourceclear.com/ci.sh | bash -s scan . --update-advisor
+  displayName: 'Veracode SCA Agent-Based'
+  continueOnError: true
+
+- task: Veracode@3
+  inputs:
+    ConnectionDetailsSelection: 'Credentials'
+    apiId: '$(apiid)'
+    apiKey: '$(apikey)'
+    veracodeAppProfile: 'Verademo-AzureDevOps'
+    version: '$(build.buildNumber)'
+    filepath: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
+    sandboxName: '$(Build.SourceBranchName)'
+    createSandBox: true
+    failTheBuildIfVeracodeScanDidNotInitiate: true
+    maximumWaitTime: '30'
+  displayName: 'Veracode Static upload and Scan'
+
+- script: |
+    curl -O -L https://downloads.veracode.com/securityscan/pipeline-scan-LATEST.zip
+  displayName: 'Download Pipeline Scanner'
+- task: ExtractFiles@1
+  inputs:
+    archiveFilePatterns: 'pipeline-scan-LATEST.zip'
+    destinationFolder: '$(Build.ArtifactStagingDirectory)'
+    cleanDestinationFolder: false
+- script: |
+      java -jar $(Build.ArtifactStagingDirectory)/pipeline-scan.jar --veracode_api_id "$(apiid)" --veracode_api_key "$(apikey)" --file "$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz" --issue_details true 
+  env:
+    VERACODE_API_ID: $(apiid)
+    VERACODE_API_KEY: $(apikey)
+  displayName: 'Veracode Static Analysis PipelineScan'
+  continueOnError: true
+
+- task: Veracode Flaw Importer@3
+  inputs:
+    ConnectionDetailsSelection: 'Credentials'
+    apiId: '$(apiid)'
+    apiKey: '$(apikey)'
+    veracodeAppProfile: 'Verademo-AzureDevOps'
+    sandboxName: '$(Build.SourceBranchName)'
+    importType: 'All Flaws'
+    workItemType: 'Issue'
+    area: '$(system.teamProject)'
+    addCustomTag: '$(Build.SourceBranchName)'
+    flawImportLimit: '1000'
+
