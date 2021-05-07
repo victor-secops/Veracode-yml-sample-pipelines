@@ -4,7 +4,6 @@
 - Azure DevOps
 - Jenkins
 - GitLab
-- GitHub actions
 - CircleCI
 
 ## pipelines have:
