@@ -31,9 +31,12 @@ Veracode_Import:
     script:
         - |
             apt-get update && apt-get install -qy xmlstarlet libxml2-utils
+            #pega o id do perfil de aplicação, alterar o grep apos o segundo pipe para o nome do perfil de aplicação desejado
             app_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getapplist | grep -w "VeraImport" | sed -n 's/.* app_id=\"\([0-9]*\)\" .*/\1/p')
             echo $app_ID
+            #pega o id do ultimo scan
             build_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getbuildinfo -appid $app_ID | sed '2 s/xmlns=".*"//g' | xmllint --xpath "string(/buildinfo/build/@build_id)" -) 
+            #faz o request para obter os resultados da analise com buildID obtido anteriormente
             java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action detailedreport -buildid $build_ID -outputfilepath results.xml
             xmlResults=$(cat results.xml | sed '2 s/xmlns=".*"//g')
             flawCount=$(echo ${xmlResults} | xmllint --xpath "count(/detailedreport/severity/category/cwe/staticflaws/flaw)" -)
