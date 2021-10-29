@@ -1,0 +1,55 @@
+stages:
+    - mitigation_pipe
+
+mitigation_pipe:
+    image: openjdk:8
+    stage: mitigation_pipe
+    before_script:
+        - wget -q -O veracode-wrapper.jar https://repo1.maven.org/maven2/com/veracode/vosp/api/wrappers/vosp-api-wrappers-java/21.9.8.2/vosp-api-wrappers-java-21.9.8.2.jar
+    script:
+        - |
+            apt-get update && apt-get install -qy xmlstarlet libxml2-utils
+            #pega o id do perfil de aplicação, alterar o grep apos o segundo pipe para o nome do perfil de aplicação desejado
+            app_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getapplist | grep -w ${appname} | sed -n 's/.* app_id=\"\([0-9]*\)\" .*/\1/p')
+            #echo $app_ID
+            #pega o id do ultimo scan
+            build_ID=$(java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action getbuildinfo -appid $app_ID | sed '2 s/xmlns=".*"//g' | xmllint --xpath "string(/buildinfo/build/@build_id)" -) 
+            #faz o request para obter os resultados da analise com buildID obtido anteriormente
+            java -jar veracode-wrapper.jar -vid ${TEAM_ANALYSISCENTER_ID} -vkey ${TEAM_ANALYSISCENTER_KEY} -action detailedreport -buildid $build_ID -outputfilepath results.xml
+            xmlResults=$(cat results.xml | sed '2 s/xmlns=".*"//g')
+            flawCount=$(echo ${xmlResults} | xmllint --xpath "count(/detailedreport/severity/category/cwe/staticflaws/flaw)" -)
+            declare -A sevDesc
+            sevDesc[0]="Info"
+            sevDesc[1]="VeryLow"
+            sevDesc[2]="Low"
+            sevDesc[3]="Medium"
+            sevDesc[4]="High"
+            sevDesc[5]="VeryHigh"
+            for ((i=1; i<=flawCount; i++)); do
+            flaw=$(echo ${xmlResults} | xmllint --xpath '(/detailedreport/severity/category/cwe/staticflaws/flaw)['"$i"']' -)          mitigation_status=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@mitigation_status)' -)    
+            if [[ $mitigation_status != "none" ]]; then
+               
+                issueid=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@issueid)' -)
+                severity=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@severity)' -)
+                module=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@module)' -)
+                categoryname=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@categoryname)' -)
+                description=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@description)' -)
+                sourcefilepath=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@sourcefilepath)' -)
+                sourcefile=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@sourcefile)' -)
+                line=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@line)' -)
+                remediation_status=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@remediation_status)' -)
+                affects_policy_compliance=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@affects_policy_compliance)' -)
+                pcirelated=$(echo ${flaw} | xmllint --xpath 'string(/flaw/@pcirelated)' -) 
+
+                issueDescription=$(echo -e "\`\`\`\n- Veracode ID = $issueid\n- Severity = ${sevDesc[$severity]}\n- module = $module\n- File = $sourcefile ($sourcefilepath)\n- Line = $line\n- Affects policy compliance = $affects_policy_compliance\n- PCI related = $pcirelated\n\`\`\`\n**Description:**\n\n$description")
+                
+                echo $issueDescription
+                bfcontent = {'findings': matched_findings}
+
+            fi;
+            done
+        
+
+
+
+
